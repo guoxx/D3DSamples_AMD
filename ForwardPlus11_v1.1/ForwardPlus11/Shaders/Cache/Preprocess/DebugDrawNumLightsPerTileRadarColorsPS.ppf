@@ -1,0 +1,324 @@
+#pragma warning (disable:3571)
+#line 1 "\\\\?\\D:\\Downloads\\ForwardPlus11_v1.1\\ForwardPlus11_v1.1\\ForwardPlus11\\Shaders\\source\\ForwardPlus11DebugDraw.hlsl"
+
+
+#line 53
+
+
+#line 1 "\\\\?\\D:\\Downloads\\ForwardPlus11_v1.1\\ForwardPlus11_v1.1\\ForwardPlus11\\Shaders\\source\\ForwardPlus11Common.hlsl"
+
+
+#line 56
+cbuffer cbPerObject : register ( b0 ) 
+{ 
+    matrix g_mWorldViewProjection : packoffset ( c0 ) ; 
+    matrix g_mWorldView : packoffset ( c4 ) ; 
+    matrix g_mWorld : packoffset ( c8 ) ; 
+    float4 g_MaterialAmbientColorUp : packoffset ( c12 ) ; 
+    float4 g_MaterialAmbientColorDown : packoffset ( c13 ) ; 
+} 
+
+cbuffer cbPerFrame : register ( b1 ) 
+{ 
+    matrix g_mProjection : packoffset ( c0 ) ; 
+    matrix g_mProjectionInv : packoffset ( c4 ) ; 
+    float3 g_vCameraPos : packoffset ( c8 ) ; 
+    float g_fAlphaTest : packoffset ( c8 . w ) ; 
+    uint g_uNumLights : packoffset ( c9 ) ; 
+    uint g_uWindowWidth : packoffset ( c9 . y ) ; 
+    uint g_uWindowHeight : packoffset ( c9 . z ) ; 
+    uint g_uMaxNumLightsPerTile : packoffset ( c9 . w ) ; 
+} ; 
+
+#line 80
+
+
+#line 86
+
+
+
+#line 92
+uint GetTileIndex ( float2 ScreenPos ) 
+{ 
+    float fTileRes = ( float ) 16 ; 
+    uint nNumCellsX = ( g_uWindowWidth + 16 - 1 ) / 16 ; 
+    uint nTileIdx = floor ( ScreenPos . x / fTileRes ) + floor ( ScreenPos . y / fTileRes ) * nNumCellsX ; 
+    return nTileIdx ; 
+} 
+
+
+
+#line 56 "\\\\?\\D:\\Downloads\\ForwardPlus11_v1.1\\ForwardPlus11_v1.1\\ForwardPlus11\\Shaders\\source\\ForwardPlus11DebugDraw.hlsl"
+
+
+#line 61
+static const float4 kRadarColors [ 14 ] = 
+{ 
+    { 0 , 0.9255 , 0.9255 , 1 } , 
+    { 0 , 0.62745 , 0.9647 , 1 } , 
+    { 0 , 0 , 0.9647 , 1 } , 
+    { 0 , 1 , 0 , 1 } , 
+    { 0 , 0.7843 , 0 , 1 } , 
+    { 0 , 0.5647 , 0 , 1 } , 
+    { 1 , 1 , 0 , 1 } , 
+    { 0.90588 , 0.75294 , 0 , 1 } , 
+    { 1 , 0.5647 , 0 , 1 } , 
+    { 1 , 0 , 0 , 1 } , 
+    { 0.8392 , 0 , 0 , 1 } , 
+    { 0.75294 , 0 , 0 , 1 } , 
+    { 1 , 0 , 1 , 1 } , 
+    { 0.6 , 0.3333 , 0.7882 , 1 } , 
+} ; 
+
+#line 85
+Buffer < float4 > g_PointLightBufferCenterAndRadius : register ( t2 ) ; 
+Buffer < float4 > g_PointLightBufferColor : register ( t3 ) ; 
+Buffer < float4 > g_SpotLightBufferCenterAndRadius : register ( t4 ) ; 
+Buffer < float4 > g_SpotLightBufferColor : register ( t5 ) ; 
+Buffer < float4 > g_SpotLightBufferSpotParams : register ( t6 ) ; 
+Buffer < uint > g_PerTileLightIndexBuffer : register ( t7 ) ; 
+
+Buffer < float4 > g_SpotLightBufferSpotMatrices : register ( t8 ) ; 
+
+#line 97
+uint GetNumLightsInThisTile ( uint nTileIndex ) 
+{ 
+    uint nNumLightsInThisTile = 0 ; 
+    uint nIndex = g_uMaxNumLightsPerTile * nTileIndex ; 
+    uint nNextLightIndex = g_PerTileLightIndexBuffer [ nIndex ] ; 
+    
+#line 104
+    while ( nNextLightIndex != 0x7fffffff ) 
+    { 
+        nNumLightsInThisTile ++ ; 
+        nIndex ++ ; 
+        nNextLightIndex = g_PerTileLightIndexBuffer [ nIndex ] ; 
+    } 
+    
+#line 112
+    nIndex ++ ; 
+    nNextLightIndex = g_PerTileLightIndexBuffer [ nIndex ] ; 
+    
+#line 116
+    while ( nNextLightIndex != 0x7fffffff ) 
+    { 
+        nNumLightsInThisTile ++ ; 
+        nIndex ++ ; 
+        nNextLightIndex = g_PerTileLightIndexBuffer [ nIndex ] ; 
+    } 
+    
+    return nNumLightsInThisTile ; 
+} 
+
+#line 129
+struct VS_INPUT_POS_TEX 
+{ 
+    float3 Position : POSITION ; 
+    float2 TextureUV : TEXCOORD0 ; 
+} ; 
+
+struct VS_OUTPUT_POS_TEX 
+{ 
+    float4 Position : SV_POSITION ; 
+    float2 TextureUV : TEXCOORD0 ; 
+} ; 
+
+struct VS_INPUT_DRAW_POINT_LIGHTS 
+{ 
+    float3 Position : POSITION ; 
+    float2 TextureUV : TEXCOORD0 ; 
+    uint InstanceID : SV_InstanceID ; 
+} ; 
+
+struct VS_OUTPUT_DRAW_POINT_LIGHTS 
+{ 
+    float4 Position : SV_POSITION ; 
+    float4 Color : COLOR0 ; 
+    float2 TextureUV : TEXCOORD0 ; 
+} ; 
+
+struct VS_INPUT_DRAW_SPOT_LIGHTS 
+{ 
+    float3 Position : POSITION ; 
+    float3 Normal : NORMAL ; 
+    float2 TextureUV : TEXCOORD0 ; 
+    uint InstanceID : SV_InstanceID ; 
+} ; 
+
+struct VS_OUTPUT_DRAW_SPOT_LIGHTS 
+{ 
+    float4 Position : SV_POSITION ; 
+    float3 Normal : NORMAL ; 
+    float4 Color : COLOR0 ; 
+    float2 TextureUV : TEXCOORD0 ; 
+    float3 PositionWS : TEXCOORD1 ; 
+} ; 
+
+struct VS_OUTPUT_POSITION_ONLY 
+{ 
+    float4 Position : SV_POSITION ; 
+} ; 
+
+#line 181
+VS_OUTPUT_DRAW_POINT_LIGHTS DebugDrawPointLightsVS ( VS_INPUT_DRAW_POINT_LIGHTS Input ) 
+{ 
+    VS_OUTPUT_DRAW_POINT_LIGHTS Output ; 
+    
+#line 186
+    float4 LightPositionViewSpace = mul ( float4 ( g_PointLightBufferCenterAndRadius [ Input . InstanceID ] . xyz , 1 ) , g_mWorldView ) ; 
+    
+#line 189
+    LightPositionViewSpace . xy = LightPositionViewSpace . xy + Input . Position . xy ; 
+    
+#line 192
+    Output . Position = mul ( LightPositionViewSpace , g_mProjection ) ; 
+    
+#line 195
+    Output . Color = g_PointLightBufferColor [ Input . InstanceID ] ; 
+    Output . TextureUV = Input . TextureUV ; 
+    return Output ; 
+} 
+
+#line 204
+VS_OUTPUT_DRAW_SPOT_LIGHTS DebugDrawSpotLightsVS ( VS_INPUT_DRAW_SPOT_LIGHTS Input ) 
+{ 
+    VS_OUTPUT_DRAW_SPOT_LIGHTS Output ; 
+    
+    float4 BoundingSphereCenterAndRadius = g_SpotLightBufferCenterAndRadius [ Input . InstanceID ] ; 
+    float4 SpotParams = g_SpotLightBufferSpotParams [ Input . InstanceID ] ; 
+    
+#line 212
+    float3 SpotLightDir ; 
+    SpotLightDir . xy = SpotParams . xy ; 
+    SpotLightDir . z = sqrt ( 1 - SpotLightDir . x * SpotLightDir . x - SpotLightDir . y * SpotLightDir . y ) ; 
+    
+#line 217
+    SpotLightDir . z = ( SpotParams . z > 0 ) ? SpotLightDir . z : - SpotLightDir . z ; 
+    
+#line 221
+    float3 LightPosition = BoundingSphereCenterAndRadius . xyz - BoundingSphereCenterAndRadius . w * SpotLightDir ; 
+    
+#line 224
+    float4x4 LightRotation = { g_SpotLightBufferSpotMatrices [ 4 * Input . InstanceID ] , 
+        g_SpotLightBufferSpotMatrices [ 4 * Input . InstanceID + 1 ] , 
+        g_SpotLightBufferSpotMatrices [ 4 * Input . InstanceID + 2 ] , 
+        g_SpotLightBufferSpotMatrices [ 4 * Input . InstanceID + 3 ] } ; 
+    float3 VertexPosition = mul ( Input . Position , ( float3x3 ) LightRotation ) + LightPosition ; 
+    float3 VertexNormal = mul ( Input . Normal , ( float3x3 ) LightRotation ) ; 
+    
+#line 232
+    Output . Position = mul ( float4 ( VertexPosition , 1 ) , g_mWorldViewProjection ) ; 
+    
+#line 235
+    Output . PositionWS = mul ( VertexPosition , ( float3x3 ) g_mWorld ) ; 
+    Output . Normal = mul ( VertexNormal , ( float3x3 ) g_mWorld ) ; 
+    
+#line 239
+    Output . Color = g_SpotLightBufferColor [ Input . InstanceID ] ; 
+    Output . TextureUV = Input . TextureUV ; 
+    return Output ; 
+} 
+
+#line 247
+float4 DebugDrawPointLightsPS ( VS_OUTPUT_DRAW_POINT_LIGHTS Input ) : SV_TARGET 
+{ 
+    float fRad = 0.5f ; 
+    float2 Crd = Input . TextureUV - float2 ( fRad , fRad ) ; 
+    float fCrdLength = length ( Crd ) ; 
+    
+#line 254
+    if ( fCrdLength > fRad ) discard ; 
+    
+#line 257
+    float x = ( 1.f - fCrdLength / fRad ) ; 
+    return ( 0.5f * pow ( x , 5.f ) * Input . Color + 2.f * pow ( x , 20.f ) ) ; 
+} 
+
+#line 264
+float4 DebugDrawSpotLightsPS ( VS_OUTPUT_DRAW_SPOT_LIGHTS Input ) : SV_TARGET 
+{ 
+    float3 vViewDir = normalize ( g_vCameraPos - Input . PositionWS ) ; 
+    float3 vNormal = normalize ( Input . Normal ) ; 
+    float fEdgeFade = dot ( vViewDir , vNormal ) ; 
+    fEdgeFade = saturate ( fEdgeFade * fEdgeFade ) ; 
+    return fEdgeFade * Input . Color ; 
+} 
+
+#line 276
+float4 DebugDrawNumLightsPerTileGrayscalePS ( VS_OUTPUT_POSITION_ONLY Input ) : SV_TARGET 
+{ 
+    uint nTileIndex = GetTileIndex ( Input . Position . xy ) ; 
+    uint nNumLightsInThisTile = GetNumLightsInThisTile ( nTileIndex ) ; 
+    float fPercentOfMax = ( float ) nNumLightsInThisTile / ( float ) g_uMaxNumLightsPerTile ; 
+    return float4 ( fPercentOfMax , fPercentOfMax , fPercentOfMax , 1.0f ) ; 
+} 
+
+#line 287
+float4 DebugDrawNumLightsPerTileRadarColorsPS ( VS_OUTPUT_POSITION_ONLY Input ) : SV_TARGET 
+{ 
+    uint nTileIndex = GetTileIndex ( Input . Position . xy ) ; 
+    uint nNumLightsInThisTile = GetNumLightsInThisTile ( nTileIndex ) ; 
+    
+#line 293
+    if ( nNumLightsInThisTile == 0 ) return float4 ( 0 , 0 , 0 , 1 ) ; 
+    
+    else if ( nNumLightsInThisTile == g_uMaxNumLightsPerTile ) return float4 ( 0.847 , 0.745 , 0.921 , 1 ) ; 
+    
+    else if ( nNumLightsInThisTile > g_uMaxNumLightsPerTile ) return float4 ( 1 , 1 , 1 , 1 ) ; 
+    
+    else 
+    { 
+        
+#line 305
+        float fLogBase = exp2 ( 0.07142857f * log2 ( ( float ) g_uMaxNumLightsPerTile ) ) ; 
+        
+#line 309
+        uint nColorIndex = floor ( log2 ( ( float ) nNumLightsInThisTile ) / log2 ( fLogBase ) ) ; 
+        return kRadarColors [ nColorIndex ] ; 
+    } 
+} 
+
+#line 318
+VS_OUTPUT_POS_TEX DebugDrawLegendForNumLightsPerTileVS ( VS_INPUT_POS_TEX Input ) 
+{ 
+    VS_OUTPUT_POS_TEX Output ; 
+    
+#line 323
+    Output . Position . x = 2.0f * ( Input . Position . x / ( float ) g_uWindowWidth ) - 1.0f ; 
+    Output . Position . y = - 2.0f * ( Input . Position . y / ( float ) g_uWindowHeight ) + 1.0f ; 
+    Output . Position . z = 0.0f ; 
+    Output . Position . w = 1.0f ; 
+    
+#line 329
+    Output . TextureUV = Input . TextureUV ; 
+    
+    return Output ; 
+} 
+
+#line 338
+float4 DebugDrawLegendForNumLightsPerTileGrayscalePS ( VS_OUTPUT_POS_TEX Input ) : SV_TARGET 
+{ 
+    float fGradVal = Input . TextureUV . y ; 
+    return float4 ( fGradVal , fGradVal , fGradVal , 1.0f ) ; 
+} 
+
+#line 348
+float4 DebugDrawLegendForNumLightsPerTileRadarColorsPS ( VS_OUTPUT_POS_TEX Input ) : SV_TARGET 
+{ 
+    uint nBandIdx = floor ( 16.999f * Input . TextureUV . y ) ; 
+    
+#line 353
+    if ( nBandIdx == 0 ) return float4 ( 0 , 0 , 0 , 1 ) ; 
+    
+    else if ( nBandIdx == 15 ) return float4 ( 0.847 , 0.745 , 0.921 , 1 ) ; 
+    
+    else if ( nBandIdx == 16 ) return float4 ( 1 , 1 , 1 , 1 ) ; 
+    
+    else 
+    { 
+        
+        uint nColorIndex = nBandIdx - 1 ; 
+        return kRadarColors [ nColorIndex ] ; 
+    } 
+} 
+ 

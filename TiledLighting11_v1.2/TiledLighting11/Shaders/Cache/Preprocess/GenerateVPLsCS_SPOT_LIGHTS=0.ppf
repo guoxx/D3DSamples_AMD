@@ -1,0 +1,306 @@
+#line 1 "\\\\?\\D:\\Downloads\\TiledLighting11_v1.2\\TiledLighting11\\Shaders\\Source\\GenerateVPLs.hlsl"
+
+
+#line 53
+
+
+#line 1 "\\\\?\\D:\\Downloads\\TiledLighting11_v1.2\\TiledLighting11\\Shaders\\Source\\CommonHeader.h"
+
+
+#line 56
+static const float4 kRadarColors [ 14 ] = 
+{ 
+    { 0 , 0.9255 , 0.9255 , 1 } , 
+    { 0 , 0.62745 , 0.9647 , 1 } , 
+    { 0 , 0 , 0.9647 , 1 } , 
+    { 0 , 1 , 0 , 1 } , 
+    { 0 , 0.7843 , 0 , 1 } , 
+    { 0 , 0.5647 , 0 , 1 } , 
+    { 1 , 1 , 0 , 1 } , 
+    { 0.90588 , 0.75294 , 0 , 1 } , 
+    { 1 , 0.5647 , 0 , 1 } , 
+    { 1 , 0 , 0 , 1 } , 
+    { 0.8392 , 0 , 0 , 1 } , 
+    { 0.75294 , 0 , 0 , 1 } , 
+    { 1 , 0 , 1 , 1 } , 
+    { 0.6 , 0.3333 , 0.7882 , 1 } , 
+} ; 
+
+#line 78
+
+
+
+
+#line 86
+
+
+
+#line 92
+cbuffer cbPerObject : register ( b0 ) 
+{ 
+    matrix g_mWorld : packoffset ( c0 ) ; 
+} 
+
+cbuffer cbPerCamera : register ( b1 ) 
+{ 
+    matrix g_mViewProjection : packoffset ( c0 ) ; 
+} ; 
+
+cbuffer cbPerFrame : register ( b2 ) 
+{ 
+    matrix g_mView : packoffset ( c0 ) ; 
+    matrix g_mProjection : packoffset ( c4 ) ; 
+    matrix g_mProjectionInv : packoffset ( c8 ) ; 
+    matrix g_mViewProjectionInvViewport : packoffset ( c12 ) ; 
+    float4 g_AmbientColorUp : packoffset ( c16 ) ; 
+    float4 g_AmbientColorDown : packoffset ( c17 ) ; 
+    float3 g_vCameraPos : packoffset ( c18 ) ; 
+    float g_fAlphaTest : packoffset ( c18 . w ) ; 
+    uint g_uNumLights : packoffset ( c19 ) ; 
+    uint g_uNumSpotLights : packoffset ( c19 . y ) ; 
+    uint g_uWindowWidth : packoffset ( c19 . z ) ; 
+    uint g_uWindowHeight : packoffset ( c19 . w ) ; 
+    uint g_uMaxNumLightsPerTile : packoffset ( c20 ) ; 
+    uint g_uMaxNumElementsPerTile : packoffset ( c20 . y ) ; 
+    uint g_uNumTilesX : packoffset ( c20 . z ) ; 
+    uint g_uNumTilesY : packoffset ( c20 . w ) ; 
+    uint g_uMaxVPLs : packoffset ( c21 ) ; 
+    uint g_uMaxNumVPLsPerTile : packoffset ( c21 . y ) ; 
+    uint g_uMaxNumVPLElementsPerTile : packoffset ( c21 . z ) ; 
+    float g_fVPLSpotStrength : packoffset ( c21 . w ) ; 
+    float g_fVPLSpotRadius : packoffset ( c22 ) ; 
+    float g_fVPLPointStrength : packoffset ( c22 . y ) ; 
+    float g_fVPLPointRadius : packoffset ( c22 . z ) ; 
+    float g_fVPLRemoveBackFaceContrib : packoffset ( c22 . w ) ; 
+    float g_fVPLColorThreshold : packoffset ( c23 ) ; 
+    float g_fVPLBrightnessThreshold : packoffset ( c23 . y ) ; 
+    float g_fPerFramePad1 : packoffset ( c23 . z ) ; 
+    float g_fPerFramePad2 : packoffset ( c23 . w ) ; 
+} ; 
+
+cbuffer cbShadowConstants : register ( b3 ) 
+{ 
+    matrix g_mPointShadowViewProj [ 12 ] [ 6 ] ; 
+    matrix g_mSpotShadowViewProj [ 12 ] ; 
+    float4 g_ShadowBias ; 
+} ; 
+
+cbuffer cbVPLConstants : register ( b4 ) 
+{ 
+    uint g_uNumVPLs ; 
+    uint g_uVPLPad [ 3 ] ; 
+} ; 
+
+struct VPLData 
+{ 
+    float4 Direction ; 
+    float4 Color ; 
+    float4 SourceLightDirection ; 
+} ; 
+
+#line 157
+SamplerState g_Sampler : register ( s0 ) ; 
+SamplerComparisonState g_ShadowSampler : register ( s1 ) ; 
+
+#line 166
+float4 ConvertProjToView ( float4 p ) 
+{ 
+    p = mul ( p , g_mProjectionInv ) ; 
+    p /= p . w ; 
+    return p ; 
+} 
+
+#line 174
+float ConvertProjDepthToView ( float z ) 
+{ 
+    z = 1.f / ( z * g_mProjectionInv . _34 + g_mProjectionInv . _44 ) ; 
+    return z ; 
+} 
+
+uint GetTileIndex ( float2 ScreenPos ) 
+{ 
+    float fTileRes = ( float ) 16 ; 
+    uint nTileIdx = floor ( ScreenPos . x / fTileRes ) + floor ( ScreenPos . y / fTileRes ) * g_uNumTilesX ; 
+    return nTileIdx ; 
+} 
+
+#line 189
+void GetLightListInfo ( in Buffer < uint > PerTileLightIndexBuffer , in uint uMaxNumLightsPerTile , in uint uMaxNumElementsPerTile , in float4 SVPosition , out uint uFirstLightIndex , out uint uNumLights ) 
+{ 
+    uint nTileIndex = GetTileIndex ( SVPosition . xy ) ; 
+    uint nStartIndex = uMaxNumElementsPerTile * nTileIndex ; 
+    
+#line 195
+    uint uHalfZBitsHigh = PerTileLightIndexBuffer [ nStartIndex ] ; 
+    uint uHalfZBitsLow = PerTileLightIndexBuffer [ nStartIndex + 1 ] ; 
+    uint uHalfZBits = ( uHalfZBitsHigh << 16 ) | uHalfZBitsLow ; 
+    float fHalfZ = asfloat ( uHalfZBits ) ; 
+    
+    float fViewPosZ = ConvertProjDepthToView ( SVPosition . z ) ; 
+    
+    uFirstLightIndex = ( fViewPosZ < fHalfZ ) ? ( nStartIndex + 4 ) : ( nStartIndex + 4 + uMaxNumLightsPerTile ) ; 
+    uNumLights = ( fViewPosZ < fHalfZ ) ? PerTileLightIndexBuffer [ nStartIndex + 2 ] : PerTileLightIndexBuffer [ nStartIndex + 3 ] ; 
+} 
+
+float4 ConvertNumberOfLightsToGrayscale ( uint nNumLightsInThisTile , uint uMaxNumLightsPerTile ) 
+{ 
+    float fPercentOfMax = ( float ) nNumLightsInThisTile / ( float ) uMaxNumLightsPerTile ; 
+    return float4 ( fPercentOfMax , fPercentOfMax , fPercentOfMax , 1.0f ) ; 
+} 
+
+float4 ConvertNumberOfLightsToRadarColor ( uint nNumLightsInThisTile , uint uMaxNumLightsPerTile ) 
+{ 
+    
+    if ( nNumLightsInThisTile == 0 ) return float4 ( 0 , 0 , 0 , 1 ) ; 
+    
+    else if ( nNumLightsInThisTile == uMaxNumLightsPerTile ) return float4 ( 0.847 , 0.745 , 0.921 , 1 ) ; 
+    
+    else if ( nNumLightsInThisTile > uMaxNumLightsPerTile ) return float4 ( 1 , 1 , 1 , 1 ) ; 
+    
+    else 
+    { 
+        
+#line 227
+        float fLogBase = exp2 ( 0.07142857f * log2 ( ( float ) uMaxNumLightsPerTile ) ) ; 
+        
+#line 231
+        uint nColorIndex = floor ( log2 ( ( float ) nNumLightsInThisTile ) / log2 ( fLogBase ) ) ; 
+        return kRadarColors [ nColorIndex ] ; 
+    } 
+} 
+
+
+#line 59 "\\\\?\\D:\\Downloads\\TiledLighting11_v1.2\\TiledLighting11\\Shaders\\Source\\GenerateVPLs.hlsl"
+RWStructuredBuffer < float4 > g_VPLPositionBuffer : register ( u0 ) ; 
+RWStructuredBuffer < VPLData > g_VPLDataBuffer : register ( u1 ) ; 
+
+Texture2D g_RSMDepthAtlas : register ( t0 ) ; 
+Texture2D g_RSMNormalAtlas : register ( t1 ) ; 
+Texture2D g_RSMDiffuseAtlas : register ( t2 ) ; 
+
+StructuredBuffer < float4x4 > g_invViewProjMatrices : register ( t3 ) ; 
+
+#line 72
+
+Buffer < float4 > g_PointLightBufferCenterAndRadius : register ( t4 ) ; 
+Buffer < float4 > g_PointLightBufferColor : register ( t5 ) ; 
+
+
+#line 80
+
+
+
+
+
+
+
+[ numthreads ( 16 , 16 , 1 ) ] 
+void GenerateVPLsCS ( uint3 globalIdx : SV_DispatchThreadID ) 
+{ 
+    uint2 uv00 = ( 32 / 16 ) * globalIdx . xy ; 
+    
+#line 94
+    
+    uint lightIndex = ( 32 / 16 ) * globalIdx . y / 32 ; 
+    uint faceIndex = ( 32 / 16 ) * globalIdx . x / 32 ; 
+    
+    
+    float3 color = 0 ; 
+    
+    float3 normal = 0 ; 
+    
+    float4 position = 1 ; 
+    
+    uint2 uv = uv00 ; 
+    
+    color = g_RSMDiffuseAtlas [ uv ] . rgb ; 
+    normal = ( 2 * g_RSMNormalAtlas [ uv ] . rgb ) - 1 ; 
+    
+    float2 viewportUV = uv . xy ; 
+    
+    viewportUV . xy %= 32 ; 
+    
+    float depth = g_RSMDepthAtlas [ uv ] . r ; 
+    
+    float x = ( 2.0f * ( ( ( float ) viewportUV . x + 0.5 ) / 32 ) ) - 1.0 ; 
+    float y = ( 2.0f * - ( ( ( float ) viewportUV . y + 0.5 ) / 32 ) ) + 1.0 ; 
+    
+    float4 screenSpacePos = float4 ( x , y , depth , 1.0 ) ; 
+    
+#line 123
+    
+    uint matrixIndex = ( 6 * lightIndex ) + faceIndex ; 
+    
+    
+    position = mul ( screenSpacePos , g_invViewProjMatrices [ matrixIndex ] ) ; 
+    
+    position . xyz /= position . w ; 
+    
+#line 145
+    
+    
+    float4 sourceLightCentreAndRadius = g_PointLightBufferCenterAndRadius [ lightIndex ] ; 
+    float3 lightPos = sourceLightCentreAndRadius . xyz ; 
+    
+    
+    
+    float3 sourceLightDir = position . xyz - lightPos ; 
+    
+    float lightDistance = length ( sourceLightDir ) ; 
+    
+    { 
+        float fFalloff = 1.0 - length ( sourceLightDir ) / sourceLightCentreAndRadius . w ; 
+        
+        color *= fFalloff ; 
+        
+        float3 normalizedColor = normalize ( color ) ; 
+        float dotR = dot ( normalizedColor , float3 ( 1 , 0 , 0 ) ) ; 
+        float dotG = dot ( normalizedColor , float3 ( 0 , 1 , 0 ) ) ; 
+        float dotB = dot ( normalizedColor , float3 ( 0 , 0 , 1 ) ) ; 
+        
+        float threshold = g_fVPLColorThreshold ; 
+        
+        bool isInterestingColor = dotR > threshold || dotG > threshold || dotB > threshold ; 
+        
+        if ( isInterestingColor ) 
+        { 
+            float4 positionAndRadius ; 
+            
+            float lightStrength = 1.0 ; 
+            
+#line 179
+            
+            positionAndRadius . w = g_fVPLPointRadius ; 
+            lightStrength *= g_fVPLPointStrength ; 
+            
+            
+            positionAndRadius . xyz = position . xyz ; 
+            
+#line 188
+            
+            color = color * g_PointLightBufferColor [ lightIndex ] . rgb * lightStrength ; 
+            
+            
+            float colorStrength = length ( color ) ; 
+            if ( colorStrength > g_fVPLBrightnessThreshold ) 
+            { 
+                VPLData data ; 
+                
+                data . Color = float4 ( color , 1 ) ; 
+                data . Direction = float4 ( normal , 0 ) ; 
+                
+#line 203
+                
+                data . SourceLightDirection . xyz = normalize ( - sourceLightDir ) ; 
+                data . SourceLightDirection . w = 0 ; 
+                
+                
+                uint index = g_VPLPositionBuffer . IncrementCounter ( ) ; 
+                
+                g_VPLPositionBuffer [ index ] = positionAndRadius ; 
+                g_VPLDataBuffer [ index ] = data ; 
+            } 
+        } 
+    } 
+} 
+ 

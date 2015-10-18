@@ -1,0 +1,290 @@
+#line 1 "\\\\?\\D:\\Downloads\\ForwardPlus11_v1.1\\ForwardPlus11_v1.1\\ForwardPlus11\\Shaders\\source\\ForwardPlus11.hlsl"
+
+
+#line 53
+
+
+#line 1 "\\\\?\\D:\\Downloads\\ForwardPlus11_v1.1\\ForwardPlus11_v1.1\\ForwardPlus11\\Shaders\\source\\ForwardPlus11Common.hlsl"
+
+
+#line 56
+cbuffer cbPerObject : register ( b0 ) 
+{ 
+    matrix g_mWorldViewProjection : packoffset ( c0 ) ; 
+    matrix g_mWorldView : packoffset ( c4 ) ; 
+    matrix g_mWorld : packoffset ( c8 ) ; 
+    float4 g_MaterialAmbientColorUp : packoffset ( c12 ) ; 
+    float4 g_MaterialAmbientColorDown : packoffset ( c13 ) ; 
+} 
+
+cbuffer cbPerFrame : register ( b1 ) 
+{ 
+    matrix g_mProjection : packoffset ( c0 ) ; 
+    matrix g_mProjectionInv : packoffset ( c4 ) ; 
+    float3 g_vCameraPos : packoffset ( c8 ) ; 
+    float g_fAlphaTest : packoffset ( c8 . w ) ; 
+    uint g_uNumLights : packoffset ( c9 ) ; 
+    uint g_uWindowWidth : packoffset ( c9 . y ) ; 
+    uint g_uWindowHeight : packoffset ( c9 . z ) ; 
+    uint g_uMaxNumLightsPerTile : packoffset ( c9 . w ) ; 
+} ; 
+
+#line 80
+
+
+#line 86
+
+
+
+#line 92
+uint GetTileIndex ( float2 ScreenPos ) 
+{ 
+    float fTileRes = ( float ) 16 ; 
+    uint nNumCellsX = ( g_uWindowWidth + 16 - 1 ) / 16 ; 
+    uint nTileIdx = floor ( ScreenPos . x / fTileRes ) + floor ( ScreenPos . y / fTileRes ) * nNumCellsX ; 
+    return nTileIdx ; 
+} 
+
+
+
+#line 59 "\\\\?\\D:\\Downloads\\ForwardPlus11_v1.1\\ForwardPlus11_v1.1\\ForwardPlus11\\Shaders\\source\\ForwardPlus11.hlsl"
+Texture2D g_TxDiffuse : register ( t0 ) ; 
+Texture2D g_TxNormal : register ( t1 ) ; 
+SamplerState g_Sampler : register ( s0 ) ; 
+
+#line 65
+Buffer < float4 > g_PointLightBufferCenterAndRadius : register ( t2 ) ; 
+Buffer < float4 > g_PointLightBufferColor : register ( t3 ) ; 
+Buffer < float4 > g_SpotLightBufferCenterAndRadius : register ( t4 ) ; 
+Buffer < float4 > g_SpotLightBufferColor : register ( t5 ) ; 
+Buffer < float4 > g_SpotLightBufferSpotParams : register ( t6 ) ; 
+Buffer < uint > g_PerTileLightIndexBuffer : register ( t7 ) ; 
+
+#line 75
+struct VS_INPUT_SCENE 
+{ 
+    float3 Position : POSITION ; 
+    float3 Normal : NORMAL ; 
+    float2 TextureUV : TEXCOORD0 ; 
+    float3 Tangent : TANGENT ; 
+} ; 
+
+struct VS_OUTPUT_SCENE 
+{ 
+    float4 Position : SV_POSITION ; 
+    float3 Normal : NORMAL ; 
+    float2 TextureUV : TEXCOORD0 ; 
+    float3 Tangent : TEXCOORD1 ; 
+    float3 PositionWS : TEXCOORD2 ; 
+} ; 
+
+struct VS_OUTPUT_POSITION_ONLY 
+{ 
+    float4 Position : SV_POSITION ; 
+} ; 
+
+struct VS_OUTPUT_POSITION_AND_TEX 
+{ 
+    float4 Position : SV_POSITION ; 
+    float2 TextureUV : TEXCOORD0 ; 
+} ; 
+
+#line 106
+VS_OUTPUT_POSITION_ONLY RenderScenePositionOnlyVS ( VS_INPUT_SCENE Input ) 
+{ 
+    VS_OUTPUT_POSITION_ONLY Output ; 
+    
+#line 111
+    Output . Position = mul ( float4 ( Input . Position , 1 ) , g_mWorldViewProjection ) ; 
+    
+    return Output ; 
+} 
+
+#line 120
+VS_OUTPUT_POSITION_AND_TEX RenderScenePositionAndTexVS ( VS_INPUT_SCENE Input ) 
+{ 
+    VS_OUTPUT_POSITION_AND_TEX Output ; 
+    
+#line 125
+    Output . Position = mul ( float4 ( Input . Position , 1 ) , g_mWorldViewProjection ) ; 
+    
+#line 128
+    Output . TextureUV = Input . TextureUV ; 
+    
+    return Output ; 
+} 
+
+#line 137
+VS_OUTPUT_SCENE RenderSceneVS ( VS_INPUT_SCENE Input ) 
+{ 
+    VS_OUTPUT_SCENE Output ; 
+    
+#line 142
+    Output . Position = mul ( float4 ( Input . Position , 1 ) , g_mWorldViewProjection ) ; 
+    
+#line 145
+    Output . PositionWS = mul ( Input . Position , ( float3x3 ) g_mWorld ) ; 
+    Output . Normal = mul ( Input . Normal , ( float3x3 ) g_mWorld ) ; 
+    Output . Tangent = mul ( Input . Tangent , ( float3x3 ) g_mWorld ) ; 
+    
+#line 150
+    Output . TextureUV = Input . TextureUV ; 
+    
+    return Output ; 
+} 
+
+#line 158
+float4 RenderSceneAlphaTestOnlyPS ( VS_OUTPUT_POSITION_AND_TEX Input ) : SV_TARGET 
+{ 
+    float4 DiffuseTex = g_TxDiffuse . Sample ( g_Sampler , Input . TextureUV ) ; 
+    float fAlpha = DiffuseTex . a ; 
+    if ( fAlpha < g_fAlphaTest ) discard ; 
+    return DiffuseTex ; 
+} 
+
+#line 169
+float4 RenderScenePS ( VS_OUTPUT_SCENE Input ) : SV_TARGET 
+{ 
+    float3 vPositionWS = Input . PositionWS ; 
+    
+    float3 AccumDiffuse = float3 ( 0 , 0 , 0 ) ; 
+    float3 AccumSpecular = float3 ( 0 , 0 , 0 ) ; 
+    
+    float4 DiffuseTex = g_TxDiffuse . Sample ( g_Sampler , Input . TextureUV ) ; 
+    
+#line 182
+    
+    float fSpecMask = DiffuseTex . a ; 
+    
+    
+#line 187
+    float3 vNorm = g_TxNormal . Sample ( g_Sampler , Input . TextureUV ) . xyz ; 
+    vNorm *= 2 ; 
+    vNorm -= float3 ( 1 , 1 , 1 ) ; 
+    
+#line 192
+    float3 vBinorm = normalize ( cross ( Input . Normal , Input . Tangent ) ) ; 
+    float3x3 BTNMatrix = float3x3 ( vBinorm , Input . Tangent , Input . Normal ) ; 
+    vNorm = normalize ( mul ( vNorm , BTNMatrix ) ) ; 
+    
+    float3 vViewDir = normalize ( g_vCameraPos - vPositionWS ) ; 
+    
+#line 202
+    
+    uint nIndex ; 
+    uint nNumPointLights = g_uNumLights & 0xFFFFu ; 
+    
+    
+#line 209
+    [ loop ] 
+    
+#line 212
+    
+    for ( nIndex = 0 ; nIndex < nNumPointLights ; nIndex ++ ) 
+    
+    { 
+        
+#line 220
+        
+        uint nLightIndex = nIndex ; 
+        
+        float4 CenterAndRadius = g_PointLightBufferCenterAndRadius [ nLightIndex ] ; 
+        
+        float3 vToLight = CenterAndRadius . xyz - vPositionWS . xyz ; 
+        float3 vLightDir = normalize ( vToLight ) ; 
+        float fLightDistance = length ( vToLight ) ; 
+        
+        float3 LightColorDiffuse = float3 ( 0 , 0 , 0 ) ; 
+        float3 LightColorSpecular = float3 ( 0 , 0 , 0 ) ; 
+        
+        float fRad = CenterAndRadius . w ; 
+        if ( fLightDistance < fRad ) 
+        { 
+            float x = fLightDistance / fRad ; 
+            
+#line 239
+            float fFalloff = - 0.05 + 1.05 / ( 1 + 20 * x * x ) ; 
+            LightColorDiffuse = g_PointLightBufferColor [ nLightIndex ] . rgb * saturate ( dot ( vLightDir , vNorm ) ) * fFalloff ; 
+            
+            float3 vHalfAngle = normalize ( vViewDir + vLightDir ) ; 
+            LightColorSpecular = g_PointLightBufferColor [ nLightIndex ] . rgb * pow ( saturate ( dot ( vHalfAngle , vNorm ) ) , 8 ) * fFalloff ; 
+        } 
+        
+        AccumDiffuse += LightColorDiffuse ; 
+        AccumSpecular += LightColorSpecular ; 
+    } 
+    
+#line 254
+    
+    uint nNumSpotLights = ( g_uNumLights & 0xFFFF0000u ) >> 16 ; 
+    
+    
+#line 260
+    [ loop ] 
+    
+#line 263
+    
+    for ( nIndex = 0 ; nIndex < nNumSpotLights ; nIndex ++ ) 
+    
+    { 
+        
+#line 271
+        
+        uint nLightIndex = nIndex ; 
+        
+        float4 BoundingSphereCenterAndRadius = g_SpotLightBufferCenterAndRadius [ nLightIndex ] ; 
+        float4 SpotParams = g_SpotLightBufferSpotParams [ nLightIndex ] ; 
+        
+#line 278
+        float3 SpotLightDir ; 
+        SpotLightDir . xy = SpotParams . xy ; 
+        SpotLightDir . z = sqrt ( 1 - SpotLightDir . x * SpotLightDir . x - SpotLightDir . y * SpotLightDir . y ) ; 
+        
+#line 283
+        SpotLightDir . z = ( SpotParams . z > 0 ) ? SpotLightDir . z : - SpotLightDir . z ; 
+        
+#line 287
+        float3 LightPosition = BoundingSphereCenterAndRadius . xyz - BoundingSphereCenterAndRadius . w * SpotLightDir ; 
+        
+        float3 vToLight = LightPosition . xyz - vPositionWS . xyz ; 
+        float3 vToLightNormalized = normalize ( vToLight ) ; 
+        float fLightDistance = length ( vToLight ) ; 
+        float fCosineOfCurrentConeAngle = dot ( - vToLightNormalized , SpotLightDir ) ; 
+        
+        float3 LightColorDiffuse = float3 ( 0 , 0 , 0 ) ; 
+        float3 LightColorSpecular = float3 ( 0 , 0 , 0 ) ; 
+        
+        float fRad = SpotParams . w ; 
+        float fCosineOfConeAngle = ( SpotParams . z > 0 ) ? SpotParams . z : - SpotParams . z ; 
+        if ( fLightDistance < fRad && fCosineOfCurrentConeAngle > fCosineOfConeAngle ) 
+        { 
+            float fRadialAttenuation = ( fCosineOfCurrentConeAngle - fCosineOfConeAngle ) / ( 1.0 - fCosineOfConeAngle ) ; 
+            fRadialAttenuation = fRadialAttenuation * fRadialAttenuation ; 
+            
+            float x = fLightDistance / fRad ; 
+            
+#line 308
+            float fFalloff = - 0.05 + 1.05 / ( 1 + 20 * x * x ) ; 
+            LightColorDiffuse = g_SpotLightBufferColor [ nLightIndex ] . rgb * saturate ( dot ( vToLightNormalized , vNorm ) ) * fFalloff * fRadialAttenuation ; 
+            
+            float3 vHalfAngle = normalize ( vViewDir + vToLightNormalized ) ; 
+            LightColorSpecular = g_SpotLightBufferColor [ nLightIndex ] . rgb * pow ( saturate ( dot ( vHalfAngle , vNorm ) ) , 8 ) * fFalloff * fRadialAttenuation ; 
+        } 
+        
+        AccumDiffuse += LightColorDiffuse ; 
+        AccumSpecular += LightColorSpecular ; 
+    } 
+    
+#line 320
+    AccumDiffuse *= 2 ; 
+    AccumSpecular *= 8 ; 
+    
+#line 324
+    float fAmbientBlend = 0.5f * vNorm . y + 0.5 ; 
+    float3 Ambient = g_MaterialAmbientColorUp . rgb * fAmbientBlend + g_MaterialAmbientColorDown . rgb * ( 1 - fAmbientBlend ) ; 
+    
+#line 328
+    float3 DiffuseAndAmbient = AccumDiffuse + Ambient ; 
+    return float4 ( DiffuseTex . xyz * ( DiffuseAndAmbient + AccumSpecular * fSpecMask ) , 1 ) ; 
+} 
+ 
