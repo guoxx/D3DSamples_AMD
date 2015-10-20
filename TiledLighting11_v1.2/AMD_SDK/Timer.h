@@ -677,13 +677,13 @@ protected:
 
 // makros, analogue to PIX
 #define TIMER_Begin( col, name )					\
-	TimerEx::Instance( ).Start( name );				
-//	DXUT_BeginPerfEvent( col, name );
+	TimerEx::Instance( ).Start( name );				\
+	DXUT_BeginPerfEvent( col, name );
 //	D3DPERF_BeginEvent( col, name );
 
 #define TIMER_End( )								\
-		TimerEx::Instance( ).Stop( );				
-//		DXUT_EndPerfEvent( );
+		TimerEx::Instance( ).Stop( );				\
+		DXUT_EndPerfEvent( );
 //		D3DPERF_EndEvent( );
 #else
 #define TIMER_Init( device )
